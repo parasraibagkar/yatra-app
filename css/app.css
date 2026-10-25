@@ -178,3 +178,13 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .stay-only[hidden] { display: none; }
 .card-contact { font-size: 13px; margin-top: 4px; color: var(--stay); }
 .card-contact a { color: var(--stay); font-weight: 600; }
+.field .tel-row { display: flex; gap: 8px; align-items: center; margin: 0; font-size: 16px; color: var(--text); }
+.tel-row input { flex: 1; min-width: 0; }
+.call-btn {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; text-decoration: none; font-weight: 600;
+  background: var(--ok); color: #fff; border-radius: 10px; padding: 10px 14px; min-height: 44px;
+}
+.call-btn[hidden] { display: none; }
+.card-contact { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.card-contact span { min-width: 0; }
+.card-contact .call-btn.small { color: #fff; padding: 6px 12px; min-height: 34px; font-size: 14px; }

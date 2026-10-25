@@ -49,6 +49,9 @@ function dayTitle(d) {
   return n >= 0 ? `Day ${n + 1} · ${dayLabel(d)}` : dayLabel(d);
 }
 
+const telHref = (n) => 'tel:' + String(n || '').replace(/[^\d+]/g, '');
+const PHONE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z"/></svg>';
+
 const isBus = (e) => BUS_CATEGORIES.includes(e.category);
 
 // Cities in the order the trip reaches them, then any others.
@@ -116,6 +119,9 @@ function field(f) {
     const dl = f.list ? `<datalist id="${id}-list">${f.list.map((o) => `<option value="${esc(o)}">`).join('')}</datalist>` : '';
     input = `<input id="${id}" name="${f.name}" type="${f.type || 'text'}" value="${esc(f.value)}" ${list} ${req}
       ${f.inputmode ? `inputmode="${f.inputmode}"` : ''} ${f.step ? `step="${f.step}"` : ''} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} autocomplete="off">${dl}`;
+    if (f.type === 'tel') {
+      input = `<span class="tel-row">${input}<a class="call-btn" href="${esc(telHref(f.value))}" ${f.value ? '' : 'hidden'}>${PHONE_ICON}Call</a></span>`;
+    }
   }
   const html = `<label class="field"><span>${esc(f.label)}</span>${input}${f.hint ? `<small>${esc(f.hint)}</small>` : ''}</label>`;
   return f.stayOnly ? `<div class="stay-only" ${f.show ? '' : 'hidden'}>${html}</div>` : html;
@@ -266,7 +272,7 @@ function renderStops() {
         <div class="card-body" data-open-stop="${esc(s.id)}">
           <div class="card-title">${esc(s.name)}</div>
           <div class="card-sub"><span class="badge">${esc(s.kind)}</span> ${esc(s.city)}${s.plannedKm ? ` · plan ${s.plannedKm} km` : ''}</div>
-          ${s.kind === 'Stay' && (s.contact || s.phone) ? `<div class="card-contact">${esc(s.contact)}${s.phone ? ` <a href="tel:${esc(s.phone.replace(/[^\d+]/g, ''))}">${esc(s.phone)}</a>` : ''}</div>` : ''}
+          ${s.kind === 'Stay' && (s.contact || s.phone) ? `<div class="card-contact"><span>${esc(s.contact)}${s.contact && s.phone ? ' · ' : ''}${esc(s.phone || '')}</span>${s.phone ? `<a class="call-btn small" href="${esc(telHref(s.phone))}">${PHONE_ICON}Call</a>` : ''}</div>` : ''}
           ${s.notes ? `<div class="card-note">${esc(s.notes)}</div>` : ''}
         </div>
         <button class="km-btn ${s.km != null ? 'has' : ''}" data-km="${esc(s.id)}">
@@ -728,6 +734,12 @@ function bindEvents() {
       box.hidden = !['__new', '__other'].includes(card.dataset.value);
       if (!box.hidden) { box.focus(); if (box.type === 'date') try { box.showPicker(); } catch { /* not supported */ } }
     }
+  });
+  $('#sheet').addEventListener('input', (e) => {
+    if (e.target.type !== 'tel') return;
+    const btn = e.target.parentElement.querySelector('.call-btn');
+    btn.href = telHref(e.target.value);
+    btn.hidden = !e.target.value.trim();
   });
   $('#sync-btn').onclick = () => runCloudSync();
   $('#photo-input').onchange = (e) => { const f = [...e.target.files]; e.target.value = ''; if (f.length) addPhotos(f); };
