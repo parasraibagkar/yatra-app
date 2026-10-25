@@ -1,7 +1,8 @@
 // Small IndexedDB wrapper. Every synced record carries id, updatedAt, by and deleted.
 const DB_NAME = 'yatra-app';
-const DB_VERSION = 1;
-export const STORES = ['stops', 'expenses', 'photos'];
+const DB_VERSION = 2;
+// receipts = synced details of each receipt picture; receiptFiles = the pictures themselves, kept on this phone.
+export const STORES = ['stops', 'expenses', 'photos', 'receipts', 'receiptFiles'];
 
 let dbPromise;
 
@@ -82,7 +83,7 @@ let deviceName = '';
 let changeListener = null;
 // Called after every local edit to stops or expenses (not after sync merges).
 export function onLocalChange(fn) { changeListener = fn; }
-const notify = (store) => { if (store !== 'photos' && changeListener) changeListener(); };
+const notify = (store) => { if (!['photos', 'receiptFiles'].includes(store) && changeListener) changeListener(); };
 export function setDeviceName(name) { deviceName = name; }
 
 // Local edit: stamps the record so it wins over older copies on other phones.

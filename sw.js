@@ -1,6 +1,6 @@
 // Offline support: the app shell is cached on first open and served from the cache after that.
 // Bump VERSION whenever the app files change so phones pick up the new version.
-const VERSION = 'yatra-v8';
+const VERSION = 'yatra-v9';
 const ASSETS = [
   './', './index.html', './css/app.css', './manifest.webmanifest',
   './js/app.js', './js/db.js', './js/sync.js', './js/seed.js', './js/sortable.js',

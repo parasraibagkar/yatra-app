@@ -4,7 +4,7 @@ import { TRIP, KINDS, CATEGORIES, BUS_CATEGORIES, PLAN_VERSION, OLD_PLAN_IDS, SE
 import { makeSortable } from './sortable.js';
 
 const state = {
-  view: 'stops', stops: [], expenses: [], photos: [],
+  view: 'stops', stops: [], expenses: [], photos: [], receipts: [],
   expCity: 'All', photoCity: 'All', device: '', cloud: null, lastSync: null,
 };
 const photoUrls = new Map();
@@ -52,6 +52,8 @@ function dayTitle(d) {
 const telHref = (n) => 'tel:' + String(n || '').replace(/[^\d+]/g, '');
 const PHONE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z"/></svg>';
 
+const CLIP_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.5 8.5a5 5 0 0 1-7-7L14 4.5a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>';
+
 const isBus = (e) => BUS_CATEGORIES.includes(e.category);
 
 // Cities in the order the trip reaches them, then any others.
@@ -82,13 +84,18 @@ function lastReading(beforeId) {
 
 // ---------- data ----------
 async function load() {
-  [state.stops, state.expenses, state.photos] = await Promise.all(['stops', 'expenses', 'photos'].map(db.getAll));
+  [state.stops, state.expenses, state.photos, state.receipts] = await Promise.all(['stops', 'expenses', 'photos', 'receipts'].map(db.getAll));
 }
 
 async function refresh() { await load(); render(); }
 
 // ---------- dialog form ----------
 function field(f) {
+  if (f.type === 'receipts') {
+    return `<div class="field"><span>${esc(f.label)}</span><div class="receipt-strip"></div>
+      <button type="button" class="btn" data-act="add-receipt">${CLIP_ICON} Add receipt or screenshot</button>
+      <input type="file" accept="image/*" multiple hidden class="receipt-input"></div>`;
+  }
   const id = 'f-' + f.name;
   const req = f.required ? 'required' : '';
   let input;
@@ -326,6 +333,7 @@ function expenseForm(exp) {
       { name: 'date', label: 'Date', type: 'day', value: e.date, hint: 'Paid before or after the trip? Choose Other date.' },
       { name: 'paidBy', label: 'Paid by', value: e.paidBy, list: payers() },
       { name: 'note', label: 'Note', value: e.note, placeholder: 'e.g. diesel full tank, lunch thali' },
+      { name: 'receipts', label: 'Receipts', type: 'receipts' },
     ],
     onSave: async (d) => {
       const amount = Number(d.amount);
@@ -334,10 +342,116 @@ function expenseForm(exp) {
       const rec = exp ? { ...exp } : { id: db.uid(), order: nextOrder(state.expenses, (x) => x.city === city) };
       Object.assign(rec, { amount, category: d.category, city, date: dayOf(d), paidBy: d.paidBy.trim(), note: d.note.trim() });
       await db.save('expenses', rec);
+      await saveReceiptDraft(rec.id, draft);
       toast(isNew ? `${inr(amount)} added` : 'Expense saved');
     },
     onDelete: exp ? () => db.softDelete('expenses', { ...exp }) : null,
   });
+  // Receipts picked in the form are saved with the expense; nothing is kept if the form is cancelled.
+  const draft = { items: exp ? receiptsOf(exp.id).map((r) => ({ id: r.id, meta: r })) : [], removed: [] };
+  const dlg = $('#sheet');
+  const strip = $('.receipt-strip', dlg);
+  const input = $('.receipt-input', dlg);
+  const paint = () => {
+    strip.innerHTML = draft.items.map((it, i) => `<button type="button" class="receipt-tile" data-tile="${i}"><span>…</span></button>`).join('');
+    draft.items.forEach(async (it, i) => {
+      const tile = $(`[data-tile="${i}"]`, strip);
+      const file = it.blob ? it : await getReceiptFile(it.id);
+      if (!tile?.isConnected) return;
+      tile.innerHTML = file ? `<img src="${receiptUrl(it.id, file, 'thumb')}" alt="Receipt ${i + 1}">`
+        : `<span>On ${esc(it.meta?.by || 'another')}'s phone</span>`;
+    });
+  };
+  paint();
+  $('[data-act=add-receipt]', dlg).onclick = () => input.click();
+  input.onchange = async () => {
+    const files = [...input.files];
+    input.value = '';
+    for (const file of files) {
+      const [blob, thumb] = await Promise.all([compress(file, 1600, 0.85), compress(file, 360, 0.7)]);
+      draft.items.push({ id: db.uid(), blob, thumb, isNew: true });
+    }
+    paint();
+  };
+  strip.onclick = (ev) => {
+    const tile = ev.target.closest('[data-tile]');
+    if (!tile) return;
+    const i = Number(tile.dataset.tile);
+    openReceipts([draft.items[i]], {
+      title: e.note || e.category,
+      onRemove: () => { const [it] = draft.items.splice(i, 1); if (!it.isNew) draft.removed.push(it.meta); paint(); },
+    });
+  };
+}
+
+// ---------- receipts ----------
+const receiptsOf = (expenseId) => live(state.receipts).filter((r) => r.expenseId === expenseId)
+  .sort((a, b) => a.createdAt - b.createdAt);
+const receiptUrls = new Map();
+
+function receiptUrl(id, file, kind = 'blob') {
+  const key = id + kind;
+  if (!receiptUrls.has(key)) receiptUrls.set(key, URL.createObjectURL(file[kind] || file.blob));
+  return receiptUrls.get(key);
+}
+
+// The picture from this phone, or from the cloud the first time it is opened here.
+async function getReceiptFile(id) {
+  const local = await db.get('receiptFiles', id);
+  if (local) return local;
+  if (!state.cloud?.url || !navigator.onLine) return null;
+  try {
+    const blob = await sync.downloadReceipt(state.cloud, id);
+    const file = { id, blob, thumb: await compress(blob, 360, 0.7), uploaded: true };
+    await db.putMany('receiptFiles', [file]);
+    return file;
+  } catch { return null; }
+}
+
+async function saveReceiptDraft(expenseId, draft) {
+  for (const it of draft.items.filter((x) => x.isNew)) {
+    await db.putMany('receiptFiles', [{ id: it.id, blob: it.blob, thumb: it.thumb, uploaded: false }]);
+    await db.save('receipts', { id: it.id, expenseId });
+  }
+  for (const meta of draft.removed) {
+    await db.softDelete('receipts', { ...meta });
+    await db.hardDelete('receiptFiles', meta.id);
+  }
+}
+
+const fileName = (title, i) => `receipt-${String(title || 'expense').replace(/[^\w]+/g, '-').slice(0, 40)}-${i + 1}.jpg`;
+
+// Full-size view of one or more receipts, each with Share; Remove only from the expense form.
+function openReceipts(items, { title, onRemove } = {}) {
+  let dlg = $('#viewer');
+  if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'viewer'; document.body.append(dlg); }
+  dlg.innerHTML = `<div class="sheet-form receipt-view">
+    <h2>${esc(title || 'Receipts')}</h2>
+    ${items.map((it, i) => `<figure data-fig="${i}"><div class="receipt-big">Loading…</div>
+      <div class="sheet-actions">${onRemove ? '<button type="button" class="btn danger" data-rm>Remove</button>' : ''}
+      <span class="grow"></span><button type="button" class="btn" data-share="${i}">Share</button></div></figure>`).join('')}
+    <div class="sheet-actions">${items.length > 1 ? '<button type="button" class="btn" data-share-all>Share all</button>' : ''}
+      <span class="grow"></span><button type="button" class="btn primary" data-close>Close</button></div>
+  </div>`;
+  const files = [];
+  items.forEach(async (it, i) => {
+    const file = it.blob ? it : await getReceiptFile(it.id);
+    files[i] = file;
+    const box = $(`[data-fig="${i}"] .receipt-big`, dlg);
+    if (!box) return;
+    box.innerHTML = file ? `<img src="${receiptUrl(it.id, file)}" alt="Receipt ${i + 1}">`
+      : `<p class="muted">This picture is on ${esc(it.meta?.by || 'another')}'s phone. It shows here after that phone syncs with internet.</p>`;
+  });
+  const asFile = (i) => files[i] && new File([files[i].blob], fileName(title, i), { type: 'image/jpeg' });
+  dlg.onclick = async (ev) => {
+    const t = ev.target.closest('[data-share],[data-share-all],[data-close],[data-rm]');
+    if (!t) return;
+    if (t.matches('[data-close]')) dlg.close();
+    else if (t.matches('[data-rm]')) { dlg.close(); onRemove(); }
+    else if (t.matches('[data-share-all]')) { const all = items.map((_, i) => asFile(i)).filter(Boolean); if (all.length) shareFiles(all, title); }
+    else { const f = asFile(Number(t.dataset.share)); if (f) shareFiles([f], title); else toast('Picture not on this phone yet'); }
+  };
+  dlg.showModal();
 }
 
 function chips(all, active, attr) {
@@ -352,6 +466,7 @@ function expenseCard(e, draggable) {
       <div class="card-title">${esc(e.note || e.category)}</div>
       <div class="card-sub"><span class="badge cat ${isBus(e) ? 'bus' : ''}">${esc(e.category)}</span> ${esc(dayLabel(e.date))}${draggable ? '' : ' · ' + esc(e.city)}${e.paidBy ? ' · ' + esc(e.paidBy) : ''}</div>
     </div>
+    ${receiptsOf(e.id).length ? `<button class="rcpt-btn" data-receipts="${esc(e.id)}" aria-label="Receipts">${CLIP_ICON}${receiptsOf(e.id).length}</button>` : ''}
     <div class="amount">${inr(e.amount)}</div>
   </div>`;
 }
@@ -565,9 +680,9 @@ function csv(rows) {
 function exportCsv(kind) {
   let rows;
   if (kind === 'expenses') {
-    rows = [['Date', 'City', 'Category', 'Bus', 'Amount', 'Paid by', 'Note'],
+    rows = [['Date', 'City', 'Category', 'Bus', 'Amount', 'Paid by', 'Note', 'Receipts'],
       ...live(state.expenses).sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order)
-        .map((e) => [e.date, e.city, e.category, isBus(e) ? 'Yes' : '', e.amount, e.paidBy, e.note])];
+        .map((e) => [e.date, e.city, e.category, isBus(e) ? 'Yes' : '', e.amount, e.paidBy, e.note, receiptsOf(e.id).length || ''])];
   } else {
     rows = [['Date', 'Stop', 'City', 'Type', 'KM reading', 'Time', 'Planned km', 'Contact', 'Phone', 'Notes'],
       ...sortedStops().map((s) => [s.date, s.name, s.city, s.kind, s.km ?? '', s.time, s.plannedKm ?? '', s.contact || '', s.phone || '', s.notes])];
@@ -626,16 +741,17 @@ async function runCloudSync({ auto = false } = {}) {
   syncing = (async () => {
     try {
       const r = await sync.cloudSync(state.cloud);
+      const sent = await sync.uploadReceipts(state.cloud);
       state.lastSync = Date.now();
       state.pending = false;
       await db.setMeta('lastSync', state.lastSync);
       await db.setMeta('pending', false);
-      const got = r.pulled.stops + r.pulled.expenses;
-      if (!auto) toast(`Synced. ${got} update(s) received, ${r.pushed} sent.`);
+      const got = r.pulled.stops + r.pulled.expenses + r.pulled.receipts;
+      if (!auto) toast(`Synced. ${got} update(s) received, ${r.pushed} sent${sent ? `, ${sent} receipt(s) uploaded` : ''}.`);
       else if (got) toast(`${got} update(s) from other phones`);
       if (!document.querySelector('.dragging')) await refresh();
     } catch (e) {
-      if (!auto || e.message.startsWith('Upload') || e.message.startsWith('Download')) toast(auto ? 'Auto sync failed, will retry. ' + e.message : e.message, 5000);
+      if (!auto || /^(Upload|Download|Receipt)/.test(e.message)) toast(auto ? 'Auto sync failed, will retry. ' + e.message : e.message, 5000);
     } finally {
       btn.classList.remove('spin');
       markPending();
@@ -746,12 +862,16 @@ function bindEvents() {
 
   $('#main').addEventListener('click', async (e) => {
     if (e.target.closest('a[href^="tel:"]')) return;
-    const t = e.target.closest('[data-open-stop],[data-km],[data-open-exp],[data-exp-city],[data-photo-city],[data-open-photo],[data-share-city],[data-export],[data-act]');
+    const t = e.target.closest('[data-open-stop],[data-km],[data-open-exp],[data-receipts],[data-exp-city],[data-photo-city],[data-open-photo],[data-share-city],[data-export],[data-act]');
     if (!t) return;
     const d = t.dataset;
     if (d.openStop) stopForm(state.stops.find((s) => s.id === d.openStop));
     else if (d.km) kmForm(state.stops.find((s) => s.id === d.km));
     else if (d.openExp) expenseForm(state.expenses.find((x) => x.id === d.openExp));
+    else if (d.receipts) {
+      const x = state.expenses.find((y) => y.id === d.receipts);
+      openReceipts(receiptsOf(x.id).map((r) => ({ id: r.id, meta: r })), { title: x.note || x.category });
+    }
     else if (d.expCity) { state.expCity = d.expCity; render(); }
     else if (d.photoCity) { state.photoCity = d.photoCity; render(); }
     else if (d.openPhoto) photoView(state.photos.find((p) => p.id === d.openPhoto));

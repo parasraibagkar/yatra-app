@@ -9,7 +9,7 @@ No build step and no packages. The folder is plain HTML, CSS and JavaScript.
 | Screen | What you can do |
 | --- | --- |
 | Stops | The 6-day plan is preloaded. Tap **+ KM** on any stop to record the odometer reading (time is filled in). Tap a stop to edit or delete it. **+** adds a stop, including small ones inside a city (fuel, lunch, Rajwada). Drag the ⋮⋮ handle to reorder; dropping under another day moves the stop to that day. A reading lower than the previous one is rejected.  Stays have Contact person and Phone fields; tap the number to call. |
-| Expenses | Add, edit and delete expenses with amount, category, city, date, paid by and a note. Any date works (Other date), e.g. a bus advance paid before the trip. Filter by city, or tap Bus to see bus advance, balance, fuel, toll and parking together. Drag to reorder; dropping under another city moves the expense there. The three advances already paid are preloaded. |
+| Expenses | Add, edit and delete expenses with amount, category, city, date, paid by and a note. Any date works (Other date), e.g. a bus advance paid before the trip. Attach receipt photos or payment screenshots to any expense and share them to WhatsApp. Filter by city, or tap Bus to see bus advance, balance, fuel, toll and parking together. Drag to reorder; dropping under another city moves the expense there. The three advances already paid are preloaded. |
 | Photos | **+** takes or picks photos; they are filed under the current city (the city of the last km reading). Tap a photo to change its city, add a caption, share or delete it. **Share** sends all of one city's photos, for example to the family WhatsApp group. |
 | Summary | Km driven against plan, per day; bus costs; spend by city, by category and by person; CSV export of expenses and the km log. |
 | Sync | Cloud sync on one tap (Supabase), or a sync file shared over WhatsApp and imported on the other phone. |
@@ -47,6 +47,7 @@ When the app files change, bump `VERSION` in `sw.js` so the phones pick up the n
 2. SQL Editor > New query > paste `supabase/setup.sql` > Run.
 3. Click **Connect** at the top of the project (or Project Settings > Data API) for the **Project URL**, and Project Settings > API Keys for the **publishable** (or legacy **anon public**) key.
 4. On each phone: Sync screen > Supabase settings > paste both, keep the trip code `indore-2026` the same on all phones > Save.
-5. Tap **Sync now** (or the ⟳ button at the top) whenever you have signal.
+5. For receipt pictures: run `supabase/receipts.sql` the same way. Pictures are saved on the phone first and uploaded on the next sync; other phones download one the first time it is opened.
+6. Tap **Sync now** (or the ⟳ button at the top) whenever you have signal.
 
 The anon key only allows reading and the newest-wins update; keep the link and key within the family.

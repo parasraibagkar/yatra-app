@@ -1,10 +1,10 @@
 // Sync between phones. Rule: for each record, the copy with the newest updatedAt wins.
 // Deletes are tombstones, so they spread like any other edit.
 // Two ways to move data: a sync file (shared over WhatsApp etc.) or Supabase on a button tap.
-// Photos stay on each phone; only stops and expenses sync.
+// Photos stay on each phone. Receipt pictures go to Supabase Storage; their details sync like expenses.
 import * as db from './db.js';
 
-export const SYNC_STORES = ['stops', 'expenses'];
+export const SYNC_STORES = ['stops', 'expenses', 'receipts'];
 
 function newer(a, b) {
   if (a.updatedAt !== b.updatedAt) return a.updatedAt > b.updatedAt;
@@ -33,13 +33,18 @@ export async function importSyncFile(file) {
   return { from: data.from, ...counts };
 }
 
+function authHeaders(key, extra = {}) {
+  const h = { apikey: key, ...extra };
+  // Legacy anon keys are JWTs and also go in Authorization; new sb_publishable_ keys must not.
+  if (key.startsWith('eyJ')) h.Authorization = 'Bearer ' + key;
+  return h;
+}
+
 // Supabase: table "records" plus the upsert_records function from supabase/setup.sql.
 export async function cloudSync({ url, key, trip }) {
   if (!url || !key || !trip) throw new Error('Add the Supabase URL, key and trip code first.');
   const base = url.replace(/\/+$/, '') + '/rest/v1';
-  const headers = { apikey: key, 'Content-Type': 'application/json' };
-  // Legacy anon keys are JWTs and also go in Authorization; new sb_publishable_ keys must not.
-  if (key.startsWith('eyJ')) headers.Authorization = 'Bearer ' + key;
+  const headers = authHeaders(key, { 'Content-Type': 'application/json' });
 
   // 1. Pull everything for this trip and merge it in.
   const res = await fetch(`${base}/records?trip=eq.${encodeURIComponent(trip)}&select=kind,data&limit=10000`, { headers });
@@ -63,4 +68,33 @@ export async function cloudSync({ url, key, trip }) {
   if (!push.ok) throw new Error(`Upload failed (${push.status}): ${await push.text()}`);
   const pushed = await push.json();
   return { pulled, pushed: typeof pushed === 'number' ? pushed : 0 };
+}
+
+// Receipt pictures: Supabase Storage bucket "receipts", one file per receipt at <trip>/<receipt id>.jpg.
+const objectUrl = ({ url, trip }, id) =>
+  `${url.replace(/\/+$/, '')}/storage/v1/object/receipts/${encodeURIComponent(trip)}/${encodeURIComponent(id)}.jpg`;
+
+// Uploads every picture taken on this phone that is not in the cloud yet. Returns how many went up.
+export async function uploadReceipts(cloud) {
+  const live = new Map((await db.getAll('receipts')).map((r) => [r.id, r]));
+  let n = 0;
+  for (const f of await db.getAll('receiptFiles')) {
+    const meta = live.get(f.id);
+    if (f.uploaded || !meta || meta.deleted) continue;
+    const res = await fetch(objectUrl(cloud, f.id), {
+      method: 'POST', headers: authHeaders(cloud.key, { 'Content-Type': 'image/jpeg' }), body: f.blob,
+    });
+    const text = res.ok ? '' : await res.text();
+    // Already there (another try got through earlier) counts as done.
+    if (!res.ok && !/duplicate|already exists/i.test(text)) throw new Error(`Receipt upload failed (${res.status}): ${text}`);
+    await db.putMany('receiptFiles', [{ ...f, uploaded: true }]);
+    n++;
+  }
+  return n;
+}
+
+export async function downloadReceipt(cloud, id) {
+  const res = await fetch(objectUrl(cloud, id), { headers: authHeaders(cloud.key) });
+  if (!res.ok) throw new Error(`Receipt download failed (${res.status})`);
+  return res.blob();
 }
