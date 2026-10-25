@@ -37,7 +37,9 @@ export async function importSyncFile(file) {
 export async function cloudSync({ url, key, trip }) {
   if (!url || !key || !trip) throw new Error('Add the Supabase URL, key and trip code first.');
   const base = url.replace(/\/+$/, '') + '/rest/v1';
-  const headers = { apikey: key, Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' };
+  const headers = { apikey: key, 'Content-Type': 'application/json' };
+  // Legacy anon keys are JWTs and also go in Authorization; new sb_publishable_ keys must not.
+  if (key.startsWith('eyJ')) headers.Authorization = 'Bearer ' + key;
 
   // 1. Pull everything for this trip and merge it in.
   const res = await fetch(`${base}/records?trip=eq.${encodeURIComponent(trip)}&select=kind,data&limit=10000`, { headers });

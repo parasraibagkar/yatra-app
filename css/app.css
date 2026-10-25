@@ -161,3 +161,20 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
   transition: .25s; pointer-events: none; z-index: 100; max-width: 90vw; text-align: center;
 }
 #toast.show { opacity: 1; transform: translateX(-50%); }
+
+/* Bus group in expenses */
+.bus-bar {
+  width: 100%; display: block; text-align: left; background: #eef4fb; border: 1px solid #cfe0f1; border-radius: 12px;
+  padding: 10px 14px; margin-bottom: 6px; color: #22598a;
+}
+.bus-bar.on { border: 2px solid #2b7bb9; }
+.bus-top { display: flex; justify-content: space-between; font-weight: 700; }
+.bus-top b { font-size: 18px; }
+.bus-parts { display: block; font-size: 13px; margin-top: 2px; color: #4a6f92; }
+.chip.bus { border-color: #9fc2e3; color: #22598a; }
+.chip.bus.on { background: #2b7bb9; border-color: #2b7bb9; color: #fff; }
+.badge.cat.bus { background: #2b7bb9; color: #fff; }
+.no-handle { width: 12px; }
+.stay-only[hidden] { display: none; }
+.card-contact { font-size: 13px; margin-top: 4px; color: var(--stay); }
+.card-contact a { color: var(--stay); font-weight: 600; }

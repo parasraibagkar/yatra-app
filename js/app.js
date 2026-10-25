@@ -1,6 +1,6 @@
 import * as db from './db.js';
 import * as sync from './sync.js';
-import { TRIP, KINDS, CATEGORIES, SEED_STOPS, SEED_EXPENSES } from './seed.js';
+import { TRIP, KINDS, CATEGORIES, BUS_CATEGORIES, PLAN_VERSION, OLD_PLAN_IDS, SEED_STOPS, SEED_EXPENSES } from './seed.js';
 import { makeSortable } from './sortable.js';
 
 const state = {
@@ -40,9 +40,16 @@ const sortedStops = () => live(state.stops).sort((a, b) => (a.date || '').locale
 function tripDays() {
   const days = new Set(TRIP.days);
   for (const s of live(state.stops)) if (s.date) days.add(s.date);
-  for (const e of live(state.expenses)) if (e.date) days.add(e.date);
   return [...days].sort();
 }
+
+// "Day 3 · Mon, 9 Nov" for trip days; just the date for any other day (e.g. an advance paid earlier).
+function dayTitle(d) {
+  const n = TRIP.days.indexOf(d);
+  return n >= 0 ? `Day ${n + 1} · ${dayLabel(d)}` : dayLabel(d);
+}
+
+const isBus = (e) => BUS_CATEGORIES.includes(e.category);
 
 // Cities in the order the trip reaches them, then any others.
 function cities() {
@@ -82,21 +89,24 @@ function field(f) {
   const id = 'f-' + f.name;
   const req = f.required ? 'required' : '';
   let input;
-  if (f.type === 'select' || f.type === 'city') {
+  if (f.type === 'select' || f.type === 'city' || f.type === 'day') {
     // Card picker: shows the chosen value; tap it to open a grid of cards.
     let opts = (f.options || []).map((o) => (Array.isArray(o) ? o : [o, o]));
     if (f.type === 'city') opts = [...new Set([...(f.value ? [f.value] : []), ...cities()])].map((c) => [c, c]);
+    if (f.type === 'day') opts = [...new Set([...tripDays(), ...(f.value ? [f.value] : [])])].sort().map((d) => [d, dayLabel(d)]);
     const isNew = f.type === 'city' && !opts.length;
     const sel = isNew ? '__new' : String(f.value ?? opts[0]?.[0] ?? '');
     const selLabel = isNew ? '+ New city' : (opts.find(([v]) => String(v) === sel)?.[1] ?? sel);
     const cards = opts.map(([v, l]) =>
       `<button type="button" class="pick-card ${String(v) === sel ? 'on' : ''}" data-value="${esc(v)}">${esc(l)}</button>`).join('');
-    const newCard = f.type === 'city' ? `<button type="button" class="pick-card new ${isNew ? 'on' : ''}" data-value="__new">+ New city</button>` : '';
+    const newCard = f.type === 'city' ? `<button type="button" class="pick-card new ${isNew ? 'on' : ''}" data-value="__new">+ New city</button>`
+      : f.type === 'day' ? '<button type="button" class="pick-card new" data-value="__other">Other date</button>' : '';
     input = `<div class="picker">
       <input type="hidden" id="${id}" name="${f.name}" value="${esc(sel)}">
       <button type="button" class="picker-current" data-picker-toggle><span>${esc(selLabel)}</span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
       <div class="picker-cards" hidden>${cards}${newCard}</div>
       ${f.type === 'city' ? `<input name="${f.name}New" type="text" placeholder="Type the city name" autocomplete="off" class="city-new" ${isNew ? '' : 'hidden'}>` : ''}
+      ${f.type === 'day' ? `<input name="${f.name}Other" type="date" class="city-new" hidden>` : ''}
     </div>`;
     return `<div class="field"><span>${esc(f.label)}</span>${input}${f.hint ? `<small>${esc(f.hint)}</small>` : ''}</div>`;
   } else if (f.type === 'textarea') {
@@ -107,7 +117,8 @@ function field(f) {
     input = `<input id="${id}" name="${f.name}" type="${f.type || 'text'}" value="${esc(f.value)}" ${list} ${req}
       ${f.inputmode ? `inputmode="${f.inputmode}"` : ''} ${f.step ? `step="${f.step}"` : ''} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} autocomplete="off">${dl}`;
   }
-  return `<label class="field"><span>${esc(f.label)}</span>${input}${f.hint ? `<small>${esc(f.hint)}</small>` : ''}</label>`;
+  const html = `<label class="field"><span>${esc(f.label)}</span>${input}${f.hint ? `<small>${esc(f.hint)}</small>` : ''}</label>`;
+  return f.stayOnly ? `<div class="stay-only" ${f.show ? '' : 'hidden'}>${html}</div>` : html;
 }
 
 function openForm({ title, fields, onSave, onDelete, saveLabel = 'Save' }) {
@@ -161,6 +172,12 @@ function cityOf(d) {
   return c;
 }
 
+function dayOf(d) {
+  const day = d.date === '__other' ? d.dateOther || '' : d.date || '';
+  if (!day) throw new Error('Pick a day or choose a date.');
+  return day;
+}
+
 const numOrNull = (v) => (v === '' || v == null ? null : Number(v));
 
 // ---------- stops ----------
@@ -173,16 +190,20 @@ function stopForm(stop) {
     fields: [
       { name: 'name', label: 'Stop name', value: s.name, required: true, placeholder: 'e.g. Rajwada, fuel pump, lunch' },
       { name: 'city', label: 'City', type: 'city', value: s.city },
-      { name: 'date', label: 'Day', type: 'select', value: s.date, options: tripDays().map((d) => [d, dayLabel(d)]) },
+      { name: 'date', label: 'Day', type: 'day', value: s.date },
       { name: 'kind', label: 'Type', type: 'select', value: s.kind, options: KINDS },
+      { name: 'contact', label: 'Contact person', value: s.contact, stayOnly: true, show: s.kind === 'Stay' },
+      { name: 'phone', label: 'Phone number', type: 'tel', inputmode: 'tel', value: s.phone, stayOnly: true, show: s.kind === 'Stay' },
       { name: 'km', label: 'Odometer reading (km)', type: 'number', inputmode: 'numeric', value: s.km ?? '',
         hint: prev ? `Last reading: ${km(prev.km)} at ${prev.name}` : 'No reading recorded yet' },
       { name: 'time', label: 'Time', type: 'time', value: s.time },
       { name: 'notes', label: 'Notes', type: 'textarea', value: s.notes },
     ],
     onSave: async (d) => {
-      const rec = stop ? { ...stop } : { id: db.uid(), order: nextOrder(state.stops, (x) => x.date === d.date) };
-      Object.assign(rec, { name: d.name.trim(), city: cityOf(d), date: d.date, kind: d.kind, notes: d.notes, time: d.time });
+      const date = dayOf(d);
+      const rec = stop ? { ...stop } : { id: db.uid(), order: nextOrder(state.stops, (x) => x.date === date) };
+      Object.assign(rec, { name: d.name.trim(), city: cityOf(d), date, kind: d.kind, notes: d.notes, time: d.time,
+        contact: (d.contact || '').trim(), phone: (d.phone || '').trim() });
       rec.km = numOrNull(d.km);
       if (rec.km != null && !rec.time) rec.time = nowTime();
       checkReading(rec, prev);
@@ -234,12 +255,10 @@ function renderStops() {
   for (const s of stops) byDay.get(s.date || '')?.push(s) ?? byDay.set(s.date || '', [s]);
 
   let html = '<div class="list" id="stop-list">';
-  let n = 0;
   for (const [day, list] of byDay) {
-    n++;
     const dayKm = dayDriven(list);
     html += `<div class="sortable-header" data-group="${esc(day)}">
-      <span>Day ${n} · ${esc(dayLabel(day))}</span><span class="muted">${dayKm != null ? km(dayKm) : ''}</span></div>`;
+      <span>${esc(dayTitle(day))}</span><span class="muted">${dayKm != null ? km(dayKm) : ''}</span></div>`;
     if (!list.length) html += '<div class="empty-day">Drag a stop here</div>';
     for (const s of list) {
       html += `<div class="card sortable-item kind-${esc(s.kind.toLowerCase())}" data-id="${esc(s.id)}">
@@ -247,6 +266,7 @@ function renderStops() {
         <div class="card-body" data-open-stop="${esc(s.id)}">
           <div class="card-title">${esc(s.name)}</div>
           <div class="card-sub"><span class="badge">${esc(s.kind)}</span> ${esc(s.city)}${s.plannedKm ? ` · plan ${s.plannedKm} km` : ''}</div>
+          ${s.kind === 'Stay' && (s.contact || s.phone) ? `<div class="card-contact">${esc(s.contact)}${s.phone ? ` <a href="tel:${esc(s.phone.replace(/[^\d+]/g, ''))}">${esc(s.phone)}</a>` : ''}</div>` : ''}
           ${s.notes ? `<div class="card-note">${esc(s.notes)}</div>` : ''}
         </div>
         <button class="km-btn ${s.km != null ? 'has' : ''}" data-km="${esc(s.id)}">
@@ -288,7 +308,8 @@ function expenseForm(exp) {
   const isNew = !exp;
   const e = exp || {
     date: tripDays().includes(todayIso()) ? todayIso() : TRIP.days[0],
-    city: state.expCity !== 'All' ? state.expCity : currentCity(), category: 'Food', paidBy: state.device,
+    city: !['All', 'Bus'].includes(state.expCity) ? state.expCity : currentCity(),
+    category: state.expCity === 'Bus' ? 'Fuel' : 'Food', paidBy: state.device,
   };
   openForm({
     title: isNew ? 'Add expense' : 'Edit expense',
@@ -296,7 +317,7 @@ function expenseForm(exp) {
       { name: 'amount', label: 'Amount (₹)', type: 'number', inputmode: 'decimal', step: '0.01', value: e.amount ?? '', required: true },
       { name: 'category', label: 'Category', type: 'select', value: e.category, options: CATEGORIES },
       { name: 'city', label: 'City', type: 'city', value: e.city },
-      { name: 'date', label: 'Day', type: 'select', value: e.date, options: tripDays().map((d) => [d, dayLabel(d)]) },
+      { name: 'date', label: 'Date', type: 'day', value: e.date, hint: 'Paid before or after the trip? Choose Other date.' },
       { name: 'paidBy', label: 'Paid by', value: e.paidBy, list: payers() },
       { name: 'note', label: 'Note', value: e.note, placeholder: 'e.g. diesel full tank, lunch thali' },
     ],
@@ -305,7 +326,7 @@ function expenseForm(exp) {
       if (!(amount > 0)) throw new Error('Enter an amount above zero.');
       const city = cityOf(d);
       const rec = exp ? { ...exp } : { id: db.uid(), order: nextOrder(state.expenses, (x) => x.city === city) };
-      Object.assign(rec, { amount, category: d.category, city, date: d.date, paidBy: d.paidBy.trim(), note: d.note.trim() });
+      Object.assign(rec, { amount, category: d.category, city, date: dayOf(d), paidBy: d.paidBy.trim(), note: d.note.trim() });
       await db.save('expenses', rec);
       toast(isNew ? `${inr(amount)} added` : 'Expense saved');
     },
@@ -318,28 +339,52 @@ function chips(all, active, attr) {
     `<button class="chip ${c === active ? 'on' : ''}" ${attr}="${esc(c)}">${esc(c)}</button>`).join('')}</div>`;
 }
 
+function expenseCard(e, draggable) {
+  return `<div class="card ${draggable ? 'sortable-item' : ''}" data-id="${esc(e.id)}">
+    ${draggable ? '<div class="drag-handle" aria-label="Drag to reorder">⋮⋮</div>' : '<div class="no-handle"></div>'}
+    <div class="card-body" data-open-exp="${esc(e.id)}">
+      <div class="card-title">${esc(e.note || e.category)}</div>
+      <div class="card-sub"><span class="badge cat ${isBus(e) ? 'bus' : ''}">${esc(e.category)}</span> ${esc(dayLabel(e.date))}${draggable ? '' : ' · ' + esc(e.city)}${e.paidBy ? ' · ' + esc(e.paidBy) : ''}</div>
+    </div>
+    <div class="amount">${inr(e.amount)}</div>
+  </div>`;
+}
+
+const sum = (list) => list.reduce((a, e) => a + Number(e.amount || 0), 0);
+
 function renderExpenses() {
   const exps = live(state.expenses);
-  const total = exps.reduce((a, e) => a + Number(e.amount || 0), 0);
+  const bus = exps.filter(isBus);
   const cityList = cities().filter((c) => exps.some((e) => e.city === c));
+  if (state.expCity !== 'All' && state.expCity !== 'Bus' && !cityList.includes(state.expCity)) state.expCity = 'All';
+  let html = `<div class="total-bar"><span>Total spent</span><b>${inr(sum(exps))}</b></div>`;
+  const busParts = BUS_CATEGORIES.map((c) => [c, sum(bus.filter((e) => e.category === c))]).filter(([, v]) => v);
+  html += `<button class="bus-bar ${state.expCity === 'Bus' ? 'on' : ''}" data-exp-city="Bus">
+    <span class="bus-top"><span>Bus</span><b>${inr(sum(bus))}</b></span>
+    <span class="bus-parts">${busParts.length ? busParts.map(([c, v]) => `${esc(c === 'Fuel' ? c : c.replace('Bus ', '').replace(/^./, (x) => x.toUpperCase()))} ${inr(v)}`).join(' · ') : 'Fuel, advance, toll and parking show here'}</span>
+  </button>`;
+  html += `<div class="chips">${['All', 'Bus', ...cityList].map((c) =>
+    `<button class="chip ${c === state.expCity ? 'on' : ''} ${c === 'Bus' ? 'bus' : ''}" data-exp-city="${esc(c)}">${esc(c)}</button>`).join('')}</div>`;
+
+  if (state.expCity === 'Bus') {
+    // Bus view: grouped by category, oldest first. Not draggable, since the groups are categories, not cities.
+    html += '<div class="list">';
+    for (const c of BUS_CATEGORIES) {
+      const list = bus.filter((e) => e.category === c).sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.createdAt - b.createdAt);
+      if (!list.length) continue;
+      html += `<div class="sortable-header"><span>${esc(c)}</span><span>${inr(sum(list))}</span></div>`;
+      html += list.map((e) => expenseCard(e, false)).join('');
+    }
+    if (!bus.length) html += '<p class="empty">No bus expenses yet. Tap + to add fuel, toll, parking or an advance.</p>';
+    return html + '</div>';
+  }
+
   const shown = state.expCity === 'All' ? cityList : [state.expCity];
-  let html = `<div class="total-bar"><span>Total spent</span><b>${inr(total)}</b></div>`;
-  html += chips(cityList, state.expCity, 'data-exp-city');
   html += '<div class="list" id="exp-list">';
   for (const city of shown) {
     const list = exps.filter((e) => e.city === city).sort((a, b) => a.order - b.order || a.createdAt - b.createdAt);
-    const sub = list.reduce((a, e) => a + Number(e.amount || 0), 0);
-    html += `<div class="sortable-header" data-group="${esc(city)}"><span>${esc(city)}</span><span>${inr(sub)}</span></div>`;
-    for (const e of list) {
-      html += `<div class="card sortable-item" data-id="${esc(e.id)}">
-        <div class="drag-handle" aria-label="Drag to reorder">⋮⋮</div>
-        <div class="card-body" data-open-exp="${esc(e.id)}">
-          <div class="card-title">${esc(e.note || e.category)}</div>
-          <div class="card-sub"><span class="badge cat">${esc(e.category)}</span> ${esc(dayLabel(e.date))}${e.paidBy ? ' · ' + esc(e.paidBy) : ''}</div>
-        </div>
-        <div class="amount">${inr(e.amount)}</div>
-      </div>`;
-    }
+    html += `<div class="sortable-header" data-group="${esc(city)}"><span>${esc(city)}</span><span>${inr(sum(list))}</span></div>`;
+    html += list.map((e) => expenseCard(e, true)).join('');
   }
   if (!exps.length) html += '<p class="empty">No expenses yet. Tap + to add one.</p>';
   html += '</div>';
@@ -468,11 +513,11 @@ function renderSummary() {
   const readings = stops.filter((s) => s.km != null);
   const totalKm = readings.length >= 2 ? readings[readings.length - 1].km - readings[0].km : 0;
   const planned = stops.reduce((a, s) => a + Number(s.plannedKm || 0), 0);
-  const dayRows = tripDays().map((d, i) => {
+  const dayRows = tripDays().map((d) => {
     const list = stops.filter((s) => s.date === d);
     const r = list.filter((s) => s.km != null);
     const plan = list.reduce((a, s) => a + Number(s.plannedKm || 0), 0);
-    return [`Day ${i + 1} · ${esc(dayLabel(d))}`, r.length ? r[0].km : '', r.length ? r[r.length - 1].km : '',
+    return [esc(dayTitle(d)), r.length ? r[0].km : '', r.length ? r[r.length - 1].km : '',
       dayDriven(list) ?? '', plan || ''];
   });
   const exps = live(state.expenses);
@@ -489,6 +534,11 @@ function renderSummary() {
     ${table(['Day', 'Start', 'End', 'Driven', 'Plan'], dayRows)}
     <h3>Expenses by city</h3>
     ${table(['City', 'Amount'], byCity.map(([c, v]) => [esc(c), inr(v)]))}
+    <h3>Bus</h3>
+    ${table(['Bus expense', 'Amount'], [
+      ...BUS_CATEGORIES.map((c) => [c, sum(exps.filter((e) => e.category === c))]).filter(([, v]) => v).map(([c, v]) => [esc(c), inr(v)]),
+      ['<b>Bus total</b>', `<b>${inr(sum(exps.filter(isBus)))}</b>`],
+    ])}
     <h3>Expenses by category</h3>
     ${table(['Category', 'Amount'], groupSum(exps, 'category').map(([c, v]) => [esc(c), inr(v)]))}
     <h3>Paid by</h3>
@@ -509,12 +559,12 @@ function csv(rows) {
 function exportCsv(kind) {
   let rows;
   if (kind === 'expenses') {
-    rows = [['Date', 'City', 'Category', 'Amount', 'Paid by', 'Note'],
+    rows = [['Date', 'City', 'Category', 'Bus', 'Amount', 'Paid by', 'Note'],
       ...live(state.expenses).sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order)
-        .map((e) => [e.date, e.city, e.category, e.amount, e.paidBy, e.note])];
+        .map((e) => [e.date, e.city, e.category, isBus(e) ? 'Yes' : '', e.amount, e.paidBy, e.note])];
   } else {
-    rows = [['Date', 'Stop', 'City', 'Type', 'KM reading', 'Time', 'Planned km', 'Notes'],
-      ...sortedStops().map((s) => [s.date, s.name, s.city, s.kind, s.km ?? '', s.time, s.plannedKm ?? '', s.notes])];
+    rows = [['Date', 'Stop', 'City', 'Type', 'KM reading', 'Time', 'Planned km', 'Contact', 'Phone', 'Notes'],
+      ...sortedStops().map((s) => [s.date, s.name, s.city, s.kind, s.km ?? '', s.time, s.plannedKm ?? '', s.contact || '', s.phone || '', s.notes])];
   }
   const file = new File(['﻿' + csv(rows)], `yatra-${kind}.csv`, { type: 'text/csv' });
   shareFiles([file], `Yatra ${kind}`);
@@ -670,13 +720,20 @@ function bindEvents() {
     for (const c of grid.children) c.classList.toggle('on', c === card);
     grid.hidden = true;
     $('[data-picker-toggle]', picker).classList.remove('open');
+    if ($('input[type=hidden]', picker).name === 'kind') {
+      for (const el of document.querySelectorAll('#sheet .stay-only')) el.hidden = card.dataset.value !== 'Stay';
+    }
     const box = $('.city-new', picker);
-    if (box) { box.hidden = card.dataset.value !== '__new'; if (!box.hidden) box.focus(); }
+    if (box) {
+      box.hidden = !['__new', '__other'].includes(card.dataset.value);
+      if (!box.hidden) { box.focus(); if (box.type === 'date') try { box.showPicker(); } catch { /* not supported */ } }
+    }
   });
   $('#sync-btn').onclick = () => runCloudSync();
   $('#photo-input').onchange = (e) => { const f = [...e.target.files]; e.target.value = ''; if (f.length) addPhotos(f); };
 
   $('#main').addEventListener('click', async (e) => {
+    if (e.target.closest('a[href^="tel:"]')) return;
     const t = e.target.closest('[data-open-stop],[data-km],[data-open-exp],[data-exp-city],[data-photo-city],[data-open-photo],[data-share-city],[data-export],[data-act]');
     if (!t) return;
     const d = t.dataset;
@@ -725,10 +782,27 @@ async function init() {
   state.cloud = await db.getMeta('cloud', null);
   state.lastSync = await db.getMeta('lastSync', null);
   db.setDeviceName(state.device);
-  if (!(await db.getMeta('seeded', false))) {
+  const seeded = await db.getMeta('seeded', false);
+  if (!seeded) await sync.merge('expenses', SEED_EXPENSES);
+  if (seeded !== PLAN_VERSION) {
+    // New plan: hide the old plan's stops that nobody edited. The tombstones carry the same fixed
+    // time on every phone, so they agree with each other and win over the untouched originals.
+    const old = await db.getAll('stops');
+    const retire = old.filter((r) => OLD_PLAN_IDS.includes(r.id) && !r.deleted && r.updatedAt === 0)
+      .map((r) => ({ ...r, deleted: true, updatedAt: 1 }));
+    await db.putMany('stops', retire);
     await sync.merge('stops', SEED_STOPS);
-    await sync.merge('expenses', SEED_EXPENSES);
-    await db.setMeta('seeded', true);
+    // An old stop someone already edited (e.g. a km reading) moves its reading onto the
+    // matching new stop, so the plan doesn't show it twice.
+    const fresh = new Map(SEED_STOPS.map((r) => [r.date + '|' + r.name, r.id]));
+    for (const r of old.filter((x) => OLD_PLAN_IDS.includes(x.id) && !x.deleted && x.updatedAt > 0)) {
+      const twin = fresh.get(r.date + '|' + r.name);
+      if (!twin) continue;
+      const target = await db.get('stops', twin);
+      await db.save('stops', { ...target, km: r.km, time: r.time, notes: r.notes || target.notes });
+      await db.softDelete('stops', { ...r });
+    }
+    await db.setMeta('seeded', PLAN_VERSION);
   }
   await load();
   bindEvents();
