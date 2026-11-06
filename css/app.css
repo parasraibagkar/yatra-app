@@ -224,3 +224,8 @@ nav button { font-size: 11px; }
 .phone-row input { width: 100%; min-width: 0; font: inherit; padding: 11px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .ph-remove { border: 1px solid var(--line); background: #fff; border-radius: 10px; font-size: 20px; color: var(--muted); }
 .search { width: 100%; font: inherit; padding: 11px 14px; border: 1px solid var(--line); border-radius: 22px; background: #fff; margin-bottom: 4px; }
+.nav-btn {
+  flex: none; align-self: center; width: 40px; height: 40px; margin: 0 6px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; color: #1a73e8; background: #e8f0fe; border: 1px solid #c6dafc;
+}
+.nav-btn:not(.has) { color: #6f8fbf; background: #f3f6fb; border-style: dashed; }

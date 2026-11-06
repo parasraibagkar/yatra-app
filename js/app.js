@@ -52,6 +52,15 @@ function dayTitle(d) {
 const telHref = (n) => 'tel:' + String(n || '').replace(/[^\d+]/g, '');
 const PHONE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z"/></svg>';
 
+const NAV_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l18-8-8 18-2-8z"/></svg>';
+
+// A pasted Google Maps share often carries the place name before the link; keep only the link.
+const linkIn = (text) => (String(text || '').match(/https?:\/\/\S+/) || [''])[0];
+
+// The saved Maps link, or else directions to the stop by name and city.
+const mapsUrl = (s) => s.mapLink
+  || `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent([...new Set([s.name.replace(/^(Stay at|Start:|Home:)\s*/i, ''), s.city].filter(Boolean))].join(', '))}`;
+
 const CLIP_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.5 8.5a5 5 0 0 1-7-7L14 4.5a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>';
 
 const isBus = (e) => BUS_CATEGORIES.includes(e.category);
@@ -216,6 +225,8 @@ function stopForm(stop) {
       { name: 'phone', label: 'Phone number', type: 'tel', inputmode: 'tel', value: s.phone, stayOnly: true, show: s.kind === 'Stay' },
       { name: 'km', label: 'Odometer reading (km)', type: 'number', inputmode: 'numeric', value: s.km ?? '',
         hint: prev ? `Last reading: ${km(prev.km)} at ${prev.name}` : 'No reading recorded yet' },
+      { name: 'mapLink', label: 'Google Maps link', inputmode: 'url', value: s.mapLink, placeholder: 'Paste the link from Maps > Share',
+        hint: 'Without a link, the navigate button searches Maps for the stop name and city.' },
       { name: 'time', label: 'Time', type: 'time', value: s.time },
       { name: 'notes', label: 'Notes', type: 'textarea', value: s.notes },
     ],
@@ -223,7 +234,8 @@ function stopForm(stop) {
       const date = dayOf(d);
       const rec = stop ? { ...stop } : { id: db.uid(), order: nextOrder(state.stops, (x) => x.date === date) };
       Object.assign(rec, { name: d.name.trim(), city: cityOf(d), date, kind: d.kind, notes: d.notes, time: d.time,
-        contact: (d.contact || '').trim(), phone: (d.phone || '').trim() });
+        contact: (d.contact || '').trim(), phone: (d.phone || '').trim(), mapLink: linkIn(d.mapLink) });
+      if (d.mapLink.trim() && !rec.mapLink) throw new Error('That does not look like a link. Copy it from Google Maps > Share.');
       rec.km = numOrNull(d.km);
       if (rec.km != null && !rec.time) rec.time = nowTime();
       checkReading(rec, prev);
@@ -289,6 +301,7 @@ function renderStops() {
           ${s.kind === 'Stay' && (s.contact || s.phone) ? `<div class="card-contact"><span>${esc(s.contact)}${s.contact && s.phone ? ' · ' : ''}${esc(s.phone || '')}</span>${s.phone ? `<a class="call-btn small" href="${esc(telHref(s.phone))}">${PHONE_ICON}Call</a>` : ''}</div>` : ''}
           ${s.notes ? `<div class="card-note">${esc(s.notes)}</div>` : ''}
         </div>
+        <a class="nav-btn ${s.mapLink ? 'has' : ''}" href="${esc(mapsUrl(s))}" target="_blank" rel="noopener" aria-label="Navigate to ${esc(s.name)}">${NAV_ICON}</a>
         <button class="km-btn ${s.km != null ? 'has' : ''}" data-km="${esc(s.id)}">
           ${s.km != null ? `<b>${Number(s.km).toLocaleString('en-IN')}</b><small>${esc(s.time || '')}${gapById[s.id] != null ? ` · +${gapById[s.id]}` : ''}</small>` : '<b>+ KM</b><small>record</small>'}
         </button>
@@ -979,7 +992,7 @@ function bindEvents() {
   $('#photo-input').onchange = (e) => { const f = [...e.target.files]; e.target.value = ''; if (f.length) addPhotos(f); };
 
   $('#main').addEventListener('click', async (e) => {
-    if (e.target.closest('a[href^="tel:"]')) return;
+    if (e.target.closest('a[href]')) return;
     const t = e.target.closest('[data-open-contact],[data-contact-city],[data-open-stop],[data-km],[data-open-exp],[data-receipts],[data-exp-city],[data-photo-city],[data-open-photo],[data-share-city],[data-export],[data-act]');
     if (!t) return;
     const d = t.dataset;
