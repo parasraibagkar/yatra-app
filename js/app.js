@@ -1084,7 +1084,11 @@ async function init() {
     const hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.register('./sw.js').catch(() => {});
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (hadController) toast('App updated. Close and reopen to use the new version.', 5000);
+      if (!hadController) return;
+      // Switch to the new version straight away, unless a form is open; then on the next return to the app.
+      const reload = () => { if (!$('#sheet').open && !document.querySelector('.dragging')) location.reload(); };
+      if ($('#sheet').open) { toast('App updated. It will refresh when you close this form.', 5000); $('#sheet').addEventListener('close', reload, { once: true }); }
+      else reload();
     });
   }
 }
