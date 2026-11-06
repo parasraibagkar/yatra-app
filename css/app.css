@@ -223,3 +223,4 @@ nav button { font-size: 11px; }
 .phone-row { display: grid; grid-template-columns: 1fr 0.8fr 40px; gap: 6px; }
 .phone-row input { width: 100%; min-width: 0; font: inherit; padding: 11px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .ph-remove { border: 1px solid var(--line); background: #fff; border-radius: 10px; font-size: 20px; color: var(--muted); }
+.search { width: 100%; font: inherit; padding: 11px 14px; border: 1px solid var(--line); border-radius: 22px; background: #fff; margin-bottom: 4px; }

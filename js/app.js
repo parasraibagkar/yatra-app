@@ -4,7 +4,7 @@ import { TRIP, KINDS, CATEGORIES, CONTACT_TYPES, BUS_CATEGORIES, PLAN_VERSION, O
 import { makeSortable } from './sortable.js';
 
 const state = {
-  view: 'stops', stops: [], expenses: [], photos: [], receipts: [], contacts: [], contactType: 'All',
+  view: 'stops', stops: [], expenses: [], photos: [], receipts: [], contacts: [], contactCity: 'All', contactQuery: '',
   expCity: 'All', photoCity: 'All', device: '', cloud: null, lastSync: null,
 };
 const photoUrls = new Map();
@@ -409,13 +409,13 @@ function contactTypes() {
 // Contact person and phone typed on Stay stops, shown here read-only.
 function stayContacts() {
   return sortedStops().filter((s) => s.kind === 'Stay' && s.phone)
-    .map((s) => ({ id: s.id, stopId: s.id, name: s.contact || s.name, type: 'Dharamshala', city: s.city,
+    .map((s) => ({ id: s.id, stopId: s.id, name: s.contact || s.name, type: 'Stay', city: s.city,
       phones: [{ number: s.phone, label: s.name }] }));
 }
 
 function contactForm(contact) {
   const isNew = !contact;
-  const c = contact || { type: CONTACT_TYPES.includes(state.contactType) ? state.contactType : CONTACT_TYPES[0], phones: [] };
+  const c = contact || { type: CONTACT_TYPES[0], city: !['All', 'No city'].includes(state.contactCity) ? state.contactCity : '', phones: [] };
   openForm({
     title: isNew ? 'Add contact' : 'Edit contact',
     fields: [
@@ -435,7 +435,6 @@ function contactForm(contact) {
       const rec = contact ? { ...contact } : { id: db.uid() };
       Object.assign(rec, { name: d.name.trim(), type, city, phones });
       await db.save('contacts', rec);
-      if (isNew) state.contactType = 'All';
       toast(isNew ? 'Contact added' : 'Contact saved');
     },
     onDelete: contact ? () => db.softDelete('contacts', { ...contact }) : null,
@@ -454,26 +453,40 @@ function contactCard(c) {
   </div>`;
 }
 
+function contactMatches(c) {
+  if (state.contactCity !== 'All' && (c.city || 'No city') !== state.contactCity) return false;
+  const q = state.contactQuery.trim().toLowerCase();
+  if (!q) return true;
+  const digits = q.replace(/\D/g, '');
+  return [c.name, c.type, c.city, ...c.phones.map((p) => p.label)].some((t) => (t || '').toLowerCase().includes(q))
+    || (digits.length >= 3 && c.phones.some((p) => p.number.replace(/\D/g, '').includes(digits)));
+}
+
 function renderContacts() {
-  const own = live(state.contacts);
-  const stays = stayContacts();
-  const types = contactTypes().filter((t) => own.some((c) => c.type === t));
-  const showStays = state.contactType === 'All' || state.contactType === 'Stays';
-  let html = chips([...types, ...(stays.length ? ['Stays'] : [])], state.contactType, 'data-contact-type');
-  html += '<div class="list">';
+  const all = [...live(state.contacts), ...stayContacts()];
+  // City chips in trip order; contacts without a city under "No city".
+  const cityList = cities().filter((c) => all.some((x) => x.city === c));
+  if (all.some((x) => !x.city)) cityList.push('No city');
+  if (state.contactCity !== 'All' && !cityList.includes(state.contactCity)) state.contactCity = 'All';
+  let html = `<input type="search" id="contact-search" class="search" placeholder="Search name, number, type or city" value="${esc(state.contactQuery)}" autocomplete="off">`;
+  html += chips(cityList, state.contactCity, 'data-contact-city');
+  html += `<div id="contact-results">${contactResults(all)}</div>`;
+  return html;
+}
+
+function contactResults(all = [...live(state.contacts), ...stayContacts()]) {
+  const shown = all.filter(contactMatches);
+  const types = [...contactTypes(), 'Stay'].filter((t) => shown.some((c) => c.type === t));
+  let html = '<div class="list">';
   for (const t of types) {
-    if (state.contactType !== 'All' && state.contactType !== t) continue;
-    const list = own.filter((c) => c.type === t).sort((a, b) => a.name.localeCompare(b.name));
-    html += `<div class="sortable-header"><span>${esc(t)}</span><span class="muted">${list.length}</span></div>`;
+    const list = shown.filter((c) => c.type === t).sort((a, b) => a.name.localeCompare(b.name));
+    html += `<div class="sortable-header"><span>${t === 'Stay' ? 'Stays (from the plan)' : esc(t)}</span><span class="muted">${list.length}</span></div>`;
     html += list.map(contactCard).join('');
   }
-  if (showStays && stays.length) {
-    html += `<div class="sortable-header"><span>Stays (from the plan)</span><span class="muted">${stays.length}</span></div>`;
-    html += stays.map(contactCard).join('');
-  }
   html += '</div>';
-  if (!own.length && !stays.length) html += '<p class="empty">No contacts yet. Tap + to add a driver, bhojanshala or anyone else.</p>';
-  else if (stays.length && showStays) html += '<p class="hint">Stay contacts come from the Stay stops; tap one to edit it there.</p>';
+  if (!all.length) html += '<p class="empty">No contacts yet. Tap + to add a driver, bhojanshala or anyone else.</p>';
+  else if (!shown.length) html += '<p class="empty">No contacts match. Try another city or clear the search.</p>';
+  else if (shown.some((c) => c.stopId)) html += '<p class="hint">Stay contacts come from the Stay stops; tap one to edit it there.</p>';
   return html;
 }
 
@@ -967,11 +980,11 @@ function bindEvents() {
 
   $('#main').addEventListener('click', async (e) => {
     if (e.target.closest('a[href^="tel:"]')) return;
-    const t = e.target.closest('[data-open-contact],[data-contact-type],[data-open-stop],[data-km],[data-open-exp],[data-receipts],[data-exp-city],[data-photo-city],[data-open-photo],[data-share-city],[data-export],[data-act]');
+    const t = e.target.closest('[data-open-contact],[data-contact-city],[data-open-stop],[data-km],[data-open-exp],[data-receipts],[data-exp-city],[data-photo-city],[data-open-photo],[data-share-city],[data-export],[data-act]');
     if (!t) return;
     const d = t.dataset;
     if (d.openContact) contactForm(state.contacts.find((x) => x.id === d.openContact));
-    else if (d.contactType) { state.contactType = d.contactType; render(); }
+    else if (d.contactCity) { state.contactCity = d.contactCity; render(); }
     else if (d.openStop) stopForm(state.stops.find((s) => s.id === d.openStop));
     else if (d.km) kmForm(state.stops.find((s) => s.id === d.km));
     else if (d.openExp) expenseForm(state.expenses.find((x) => x.id === d.openExp));
@@ -990,6 +1003,12 @@ function bindEvents() {
     else if (d.act === 'rename') askName(true);
     else if (d.act === 'cloud-sync') runCloudSync();
     else if (d.act === 'share-sync') shareFiles([await sync.buildSyncFile(state.device)], 'Yatra sync file');
+  });
+
+  $('#main').addEventListener('input', (e) => {
+    if (e.target.id !== 'contact-search') return;
+    state.contactQuery = e.target.value;
+    $('#contact-results').innerHTML = contactResults();
   });
 
   $('#main').addEventListener('change', async (e) => {
