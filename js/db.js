@@ -1,8 +1,8 @@
 // Small IndexedDB wrapper. Every synced record carries id, updatedAt, by and deleted.
 const DB_NAME = 'yatra-app';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 // receipts = synced details of each receipt picture; receiptFiles = the pictures themselves, kept on this phone.
-export const STORES = ['stops', 'expenses', 'photos', 'receipts', 'receiptFiles'];
+export const STORES = ['stops', 'expenses', 'photos', 'receipts', 'receiptFiles', 'contacts'];
 
 let dbPromise;
 
@@ -17,7 +17,15 @@ function open() {
         }
         if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta');
       };
-      req.onsuccess = () => resolve(req.result);
+      // An older copy of the app still open (another tab, or the app left open in the background)
+      // holds the database at the old version and blocks the upgrade until it closes.
+      req.onblocked = () => dispatchEvent(new Event('db-blocked'));
+      req.onsuccess = () => {
+        const db = req.result;
+        // A newer version of the app wants to upgrade: step aside and reload into it.
+        db.onversionchange = () => { db.close(); location.reload(); };
+        resolve(db);
+      };
       req.onerror = () => reject(req.error);
     });
   }

@@ -10,6 +10,8 @@ export const KINDS = ['Visit', 'Stay', 'Fuel', 'Food', 'Shopping', 'Other'];
 export const BUS_CATEGORIES = ['Bus advance', 'Bus balance', 'Fuel', 'Toll', 'Parking'];
 export const CATEGORIES = [...BUS_CATEGORIES, 'Food', 'Stay', 'Daan', 'Shopping', 'Other'];
 
+export const CONTACT_TYPES = ['Dharamshala', 'Bhojanshala', 'Driver', 'Temple office', 'Doctor', 'Other'];
+
 // Bump PLAN_VERSION when the plan changes. Phones then hide the old plan's stops
 // (unless someone already edited them) and load the new ones.
 export const PLAN_VERSION = 2;

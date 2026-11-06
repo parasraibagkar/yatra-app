@@ -1,10 +1,10 @@
 import * as db from './db.js';
 import * as sync from './sync.js';
-import { TRIP, KINDS, CATEGORIES, BUS_CATEGORIES, PLAN_VERSION, OLD_PLAN_IDS, SEED_STOPS, SEED_EXPENSES } from './seed.js';
+import { TRIP, KINDS, CATEGORIES, CONTACT_TYPES, BUS_CATEGORIES, PLAN_VERSION, OLD_PLAN_IDS, SEED_STOPS, SEED_EXPENSES } from './seed.js';
 import { makeSortable } from './sortable.js';
 
 const state = {
-  view: 'stops', stops: [], expenses: [], photos: [], receipts: [],
+  view: 'stops', stops: [], expenses: [], photos: [], receipts: [], contacts: [], contactType: 'All',
   expCity: 'All', photoCity: 'All', device: '', cloud: null, lastSync: null,
 };
 const photoUrls = new Map();
@@ -84,13 +84,17 @@ function lastReading(beforeId) {
 
 // ---------- data ----------
 async function load() {
-  [state.stops, state.expenses, state.photos, state.receipts] = await Promise.all(['stops', 'expenses', 'photos', 'receipts'].map(db.getAll));
+  [state.stops, state.expenses, state.photos, state.receipts, state.contacts] = await Promise.all(['stops', 'expenses', 'photos', 'receipts', 'contacts'].map(db.getAll));
 }
 
 async function refresh() { await load(); render(); }
 
 // ---------- dialog form ----------
 function field(f) {
+  if (f.type === 'phones') {
+    return `<div class="field"><span>${esc(f.label)}</span><div class="phone-list">${(f.value?.length ? f.value : [{}]).map(phoneRow).join('')}</div>
+      <button type="button" class="btn" data-act="add-phone">+ Add number</button></div>`;
+  }
   if (f.type === 'receipts') {
     return `<div class="field"><span>${esc(f.label)}</span><div class="receipt-strip"></div>
       <button type="button" class="btn" data-act="add-receipt">${CLIP_ICON} Add receipt or screenshot</button>
@@ -103,6 +107,7 @@ function field(f) {
     // Card picker: shows the chosen value; tap it to open a grid of cards.
     let opts = (f.options || []).map((o) => (Array.isArray(o) ? o : [o, o]));
     if (f.type === 'city') opts = [...new Set([...(f.value ? [f.value] : []), ...cities()])].map((c) => [c, c]);
+    if (f.type === 'city' && f.optional) opts.unshift(['', 'No city']);
     if (f.type === 'day') opts = [...new Set([...tripDays(), ...(f.value ? [f.value] : [])])].sort().map((d) => [d, dayLabel(d)]);
     const isNew = f.type === 'city' && !opts.length;
     const sel = isNew ? '__new' : String(f.value ?? opts[0]?.[0] ?? '');
@@ -110,13 +115,15 @@ function field(f) {
     const cards = opts.map(([v, l]) =>
       `<button type="button" class="pick-card ${String(v) === sel ? 'on' : ''}" data-value="${esc(v)}">${esc(l)}</button>`).join('');
     const newCard = f.type === 'city' ? `<button type="button" class="pick-card new ${isNew ? 'on' : ''}" data-value="__new">+ New city</button>`
-      : f.type === 'day' ? '<button type="button" class="pick-card new" data-value="__other">Other date</button>' : '';
+      : f.type === 'day' ? '<button type="button" class="pick-card new" data-value="__other">Other date</button>'
+      : f.newLabel ? `<button type="button" class="pick-card new" data-value="__new">${esc(f.newLabel)}</button>` : '';
     input = `<div class="picker">
       <input type="hidden" id="${id}" name="${f.name}" value="${esc(sel)}">
       <button type="button" class="picker-current" data-picker-toggle><span>${esc(selLabel)}</span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
       <div class="picker-cards" hidden>${cards}${newCard}</div>
       ${f.type === 'city' ? `<input name="${f.name}New" type="text" placeholder="Type the city name" autocomplete="off" class="city-new" ${isNew ? '' : 'hidden'}>` : ''}
       ${f.type === 'day' ? `<input name="${f.name}Other" type="date" class="city-new" hidden>` : ''}
+      ${f.newLabel ? `<input name="${f.name}New" type="text" placeholder="${esc(f.newPlaceholder || '')}" autocomplete="off" class="city-new" hidden>` : ''}
     </div>`;
     return `<div class="field"><span>${esc(f.label)}</span>${input}${f.hint ? `<small>${esc(f.hint)}</small>` : ''}</div>`;
   } else if (f.type === 'textarea') {
@@ -382,6 +389,92 @@ function expenseForm(exp) {
       onRemove: () => { const [it] = draft.items.splice(i, 1); if (!it.isNew) draft.removed.push(it.meta); paint(); },
     });
   };
+}
+
+// ---------- contacts ----------
+const phoneRow = (p = {}) => `<div class="phone-row">
+  <input type="tel" inputmode="tel" class="ph-num" value="${esc(p.number || '')}" placeholder="Phone number" autocomplete="off">
+  <input type="text" class="ph-label" value="${esc(p.label || '')}" placeholder="Label (optional)" autocomplete="off">
+  <button type="button" class="ph-remove" aria-label="Remove number">×</button>
+</div>`;
+
+const callIcon = (number) => `<a class="call-icon" href="${esc(telHref(number))}" aria-label="Call ${esc(number)}">${PHONE_ICON}</a>`;
+
+function contactTypes() {
+  const list = [...CONTACT_TYPES];
+  for (const c of live(state.contacts)) if (c.type && !list.includes(c.type)) list.push(c.type);
+  return list;
+}
+
+// Contact person and phone typed on Stay stops, shown here read-only.
+function stayContacts() {
+  return sortedStops().filter((s) => s.kind === 'Stay' && s.phone)
+    .map((s) => ({ id: s.id, stopId: s.id, name: s.contact || s.name, type: 'Dharamshala', city: s.city,
+      phones: [{ number: s.phone, label: s.name }] }));
+}
+
+function contactForm(contact) {
+  const isNew = !contact;
+  const c = contact || { type: CONTACT_TYPES.includes(state.contactType) ? state.contactType : CONTACT_TYPES[0], phones: [] };
+  openForm({
+    title: isNew ? 'Add contact' : 'Edit contact',
+    fields: [
+      { name: 'name', label: 'Name', value: c.name, required: true, placeholder: 'e.g. Rameshji, Hotel manager' },
+      { name: 'type', label: 'Type', type: 'select', value: c.type, options: contactTypes(), newLabel: '+ New type', newPlaceholder: 'Type the new type' },
+      { name: 'city', label: 'City (optional)', type: 'city', value: c.city || '', optional: true },
+      { name: 'phones', label: 'Phone numbers', type: 'phones', value: c.phones },
+    ],
+    onSave: async (d) => {
+      const type = (d.type === '__new' ? d.typeNew || '' : d.type || '').trim();
+      if (!type) throw new Error('Pick a type or type a new one.');
+      const city = d.city === '__new' ? (d.cityNew || '').trim() : d.city || '';
+      const phones = [...document.querySelectorAll('#sheet .phone-row')]
+        .map((row) => ({ number: $('.ph-num', row).value.trim(), label: $('.ph-label', row).value.trim() }))
+        .filter((p) => p.number);
+      if (!phones.length) throw new Error('Add at least one phone number.');
+      const rec = contact ? { ...contact } : { id: db.uid() };
+      Object.assign(rec, { name: d.name.trim(), type, city, phones });
+      await db.save('contacts', rec);
+      if (isNew) state.contactType = 'All';
+      toast(isNew ? 'Contact added' : 'Contact saved');
+    },
+    onDelete: contact ? () => db.softDelete('contacts', { ...contact }) : null,
+  });
+}
+
+function contactCard(c) {
+  return `<div class="card contact-card">
+    <div class="card-body" ${c.stopId ? `data-open-stop="${esc(c.stopId)}"` : `data-open-contact="${esc(c.id)}"`}>
+      <div class="card-title">${esc(c.name)}</div>
+      ${c.city ? `<div class="card-sub">${esc(c.city)}</div>` : ''}
+    </div>
+    <div class="phone-lines">${c.phones.map((p) => `<div class="phone-line">
+      <span><b>${esc(p.number)}</b>${p.label ? `<small>${esc(p.label)}</small>` : ''}</span>${callIcon(p.number)}</div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function renderContacts() {
+  const own = live(state.contacts);
+  const stays = stayContacts();
+  const types = contactTypes().filter((t) => own.some((c) => c.type === t));
+  const showStays = state.contactType === 'All' || state.contactType === 'Stays';
+  let html = chips([...types, ...(stays.length ? ['Stays'] : [])], state.contactType, 'data-contact-type');
+  html += '<div class="list">';
+  for (const t of types) {
+    if (state.contactType !== 'All' && state.contactType !== t) continue;
+    const list = own.filter((c) => c.type === t).sort((a, b) => a.name.localeCompare(b.name));
+    html += `<div class="sortable-header"><span>${esc(t)}</span><span class="muted">${list.length}</span></div>`;
+    html += list.map(contactCard).join('');
+  }
+  if (showStays && stays.length) {
+    html += `<div class="sortable-header"><span>Stays (from the plan)</span><span class="muted">${stays.length}</span></div>`;
+    html += stays.map(contactCard).join('');
+  }
+  html += '</div>';
+  if (!own.length && !stays.length) html += '<p class="empty">No contacts yet. Tap + to add a driver, bhojanshala or anyone else.</p>';
+  else if (stays.length && showStays) html += '<p class="hint">Stay contacts come from the Stay stops; tap one to edit it there.</p>';
+  return html;
 }
 
 // ---------- receipts ----------
@@ -746,7 +839,7 @@ async function runCloudSync({ auto = false } = {}) {
       state.pending = false;
       await db.setMeta('lastSync', state.lastSync);
       await db.setMeta('pending', false);
-      const got = r.pulled.stops + r.pulled.expenses + r.pulled.receipts;
+      const got = r.pulled.stops + r.pulled.expenses + r.pulled.receipts + r.pulled.contacts;
       if (!auto) toast(`Synced. ${got} update(s) received, ${r.pushed} sent${sent ? `, ${sent} receipt(s) uploaded` : ''}.`);
       else if (got) toast(`${got} update(s) from other phones`);
       if (!document.querySelector('.dragging')) await refresh();
@@ -794,6 +887,7 @@ const VIEWS = {
   stops: { title: 'Stops & KM', render: renderStops, fab: () => stopForm() },
   expenses: { title: 'Expenses', render: renderExpenses, fab: () => expenseForm() },
   photos: { title: 'Photos', render: renderPhotos, fab: () => $('#photo-input').click() },
+  contacts: { title: 'Contacts', render: renderContacts, fab: () => contactForm() },
   summary: { title: 'Summary', render: renderSummary },
   sync: { title: 'Sync', render: renderSync },
 };
@@ -851,9 +945,20 @@ function bindEvents() {
       if (!box.hidden) { box.focus(); if (box.type === 'date') try { box.showPicker(); } catch { /* not supported */ } }
     }
   });
+  $('#sheet').addEventListener('click', (e) => {
+    if (e.target.closest('[data-act=add-phone]')) {
+      $('#sheet .phone-list').insertAdjacentHTML('beforeend', phoneRow());
+      $('#sheet .phone-row:last-child .ph-num').focus();
+    } else if (e.target.closest('.ph-remove')) {
+      const rows = document.querySelectorAll('#sheet .phone-row');
+      if (rows.length > 1) e.target.closest('.phone-row').remove();
+      else rows[0].querySelectorAll('input').forEach((i) => { i.value = ''; });
+    }
+  });
   $('#sheet').addEventListener('input', (e) => {
     if (e.target.type !== 'tel') return;
     const btn = e.target.parentElement.querySelector('.call-btn');
+    if (!btn) return;
     btn.href = telHref(e.target.value);
     btn.hidden = !e.target.value.trim();
   });
@@ -862,10 +967,12 @@ function bindEvents() {
 
   $('#main').addEventListener('click', async (e) => {
     if (e.target.closest('a[href^="tel:"]')) return;
-    const t = e.target.closest('[data-open-stop],[data-km],[data-open-exp],[data-receipts],[data-exp-city],[data-photo-city],[data-open-photo],[data-share-city],[data-export],[data-act]');
+    const t = e.target.closest('[data-open-contact],[data-contact-type],[data-open-stop],[data-km],[data-open-exp],[data-receipts],[data-exp-city],[data-photo-city],[data-open-photo],[data-share-city],[data-export],[data-act]');
     if (!t) return;
     const d = t.dataset;
-    if (d.openStop) stopForm(state.stops.find((s) => s.id === d.openStop));
+    if (d.openContact) contactForm(state.contacts.find((x) => x.id === d.openContact));
+    else if (d.contactType) { state.contactType = d.contactType; render(); }
+    else if (d.openStop) stopForm(state.stops.find((s) => s.id === d.openStop));
     else if (d.km) kmForm(state.stops.find((s) => s.id === d.km));
     else if (d.openExp) expenseForm(state.expenses.find((x) => x.id === d.openExp));
     else if (d.receipts) {
@@ -908,6 +1015,11 @@ function bindEvents() {
   addEventListener('online', () => { render(); scheduleAutoSync(1000); });
   addEventListener('offline', render);
 }
+
+addEventListener('db-blocked', () => {
+  $('#main').innerHTML = `<div class="panel"><h3>Close the other copy of the app</h3>
+    <p>The app was updated, but an older copy is still open in another tab or window. Close it (on a phone, swipe the app away from recent apps), then reopen this page.</p></div>`;
+});
 
 async function init() {
   state.device = await db.getMeta('device', '');

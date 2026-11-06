@@ -4,7 +4,7 @@
 // Photos stay on each phone. Receipt pictures go to Supabase Storage; their details sync like expenses.
 import * as db from './db.js';
 
-export const SYNC_STORES = ['stops', 'expenses', 'receipts'];
+export const SYNC_STORES = ['stops', 'expenses', 'receipts', 'contacts'];
 
 function newer(a, b) {
   if (a.updatedAt !== b.updatedAt) return a.updatedAt > b.updatedAt;

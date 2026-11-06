@@ -205,3 +205,21 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .receipt-view figure { margin: 0 0 16px; }
 .receipt-big img { width: 100%; border-radius: 10px; display: block; }
 .receipt-big { min-height: 60px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+
+/* Contacts */
+nav button { font-size: 11px; }
+.contact-card { flex-direction: column; align-items: stretch; border-left-color: #2b7bb9; padding-bottom: 6px; }
+.contact-card .card-body { padding: 10px 14px 4px; }
+.phone-lines { padding: 0 10px 0 14px; }
+.phone-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; border-top: 1px solid var(--line); }
+.phone-line:first-child { border-top: 0; }
+.phone-line b { font-size: 16px; font-weight: 600; }
+.phone-line small { display: block; color: var(--muted); font-size: 12px; }
+.call-icon {
+  flex: none; width: 42px; height: 42px; border-radius: 50%; background: var(--ok); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+}
+.phone-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.phone-row { display: grid; grid-template-columns: 1fr 0.8fr 40px; gap: 6px; }
+.phone-row input { width: 100%; min-width: 0; font: inherit; padding: 11px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.ph-remove { border: 1px solid var(--line); background: #fff; border-radius: 10px; font-size: 20px; color: var(--muted); }
