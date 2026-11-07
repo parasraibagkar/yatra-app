@@ -237,3 +237,15 @@ nav button { font-size: 11px; }
 .city-row b { font-size: 16px; color: var(--text); }
 .city-row small { display: block; font-size: 12px; color: var(--muted); }
 .city-row.bad { border-color: #efc7c2; background: #fff6f4; }
+
+/* Pending payments */
+.total-bar small { display: block; font-size: 12px; color: #a0620a; }
+.pending-bar {
+  width: 100%; display: flex; justify-content: space-between; align-items: center; background: #fff6e0; color: #8a5300;
+  border: 1px solid #f1d38e; border-radius: 12px; padding: 10px 14px; margin-bottom: 6px; font-weight: 600;
+}
+.pending-bar.on { border: 2px solid #d99a1e; }
+.pending-bar b { font-size: 18px; }
+.badge.pending { background: #fff0c7; color: #8a5300; }
+.amount.pending { flex-direction: column; align-items: flex-end; justify-content: center; gap: 4px; color: #8a5300; }
+.mark-paid { border: 1px solid #f1d38e; background: #fff; color: #8a5300; border-radius: 8px; padding: 4px 8px; font-size: 12px; font-weight: 600; }

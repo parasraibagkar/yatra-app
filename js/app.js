@@ -63,6 +63,10 @@ const mapsUrl = (s) => s.mapLink
 
 const CLIP_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.5 8.5a5 5 0 0 1-7-7L14 4.5a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>';
 
+// Tolls are settled later (FASTag / driver), so they count as pending until marked paid.
+const PENDING_BY_DEFAULT = ['Toll'];
+const isPending = (e) => e.pending ?? PENDING_BY_DEFAULT.includes(e.category);
+
 const isBus = (e) => BUS_CATEGORIES.includes(e.category);
 
 // Cities in the order the trip reaches them, then any others.
@@ -411,6 +415,7 @@ function expenseForm(exp) {
     fields: [
       { name: 'amount', label: 'Amount (₹)', type: 'number', inputmode: 'decimal', step: '0.01', value: e.amount ?? '', required: true },
       { name: 'category', label: 'Category', type: 'select', value: e.category, options: CATEGORIES },
+      { name: 'status', label: 'Payment', type: 'select', value: isPending(e) ? 'pending' : 'paid', options: [['paid', 'Paid'], ['pending', 'Pending (not paid yet)']] },
       { name: 'city', label: 'City', type: 'city', value: e.city },
       { name: 'date', label: 'Date', type: 'day', value: e.date, hint: 'Paid before or after the trip? Choose Other date.' },
       { name: 'paidBy', label: 'Paid by', value: e.paidBy, list: payers() },
@@ -422,7 +427,7 @@ function expenseForm(exp) {
       if (!(amount > 0)) throw new Error('Enter an amount above zero.');
       const city = cityOf(d);
       const rec = exp ? { ...exp } : { id: db.uid(), order: nextOrder(state.expenses, (x) => x.city === city) };
-      Object.assign(rec, { amount, category: d.category, city, date: dayOf(d), paidBy: d.paidBy.trim(), note: d.note.trim() });
+      Object.assign(rec, { amount, category: d.category, city, date: dayOf(d), paidBy: d.paidBy.trim(), note: d.note.trim(), pending: d.status === 'pending' });
       await db.save('expenses', rec);
       await saveReceiptDraft(rec.id, draft);
       toast(isNew ? `${inr(amount)} added` : 'Expense saved');
@@ -645,10 +650,10 @@ function expenseCard(e, draggable) {
     ${draggable ? '<div class="drag-handle" aria-label="Drag to reorder">⋮⋮</div>' : '<div class="no-handle"></div>'}
     <div class="card-body" data-open-exp="${esc(e.id)}">
       <div class="card-title">${esc(e.note || e.category)}</div>
-      <div class="card-sub"><span class="badge cat ${isBus(e) ? 'bus' : ''}">${esc(e.category)}</span> ${esc(dayLabel(e.date))}${draggable ? '' : ' · ' + esc(e.city)}${e.paidBy ? ' · ' + esc(e.paidBy) : ''}</div>
+      <div class="card-sub"><span class="badge cat ${isBus(e) ? 'bus' : ''}">${esc(e.category)}</span>${isPending(e) ? ' <span class="badge pending">Pending</span>' : ''} ${esc(dayLabel(e.date))}${draggable ? '' : ' · ' + esc(e.city)}${e.paidBy ? ' · ' + esc(e.paidBy) : ''}</div>
     </div>
     ${receiptsOf(e.id).length ? `<button class="rcpt-btn" data-receipts="${esc(e.id)}" aria-label="Receipts">${CLIP_ICON}${receiptsOf(e.id).length}</button>` : ''}
-    <div class="amount">${inr(e.amount)}</div>
+    <div class="amount ${isPending(e) ? 'pending' : ''}">${inr(e.amount)}${isPending(e) ? `<button class="mark-paid" data-mark-paid="${esc(e.id)}">Mark paid</button>` : ''}</div>
   </div>`;
 }
 
@@ -658,8 +663,13 @@ function renderExpenses() {
   const exps = live(state.expenses);
   const bus = exps.filter(isBus);
   const cityList = cities().filter((c) => exps.some((e) => e.city === c));
-  if (state.expCity !== 'All' && state.expCity !== 'Bus' && !cityList.includes(state.expCity)) state.expCity = 'All';
-  let html = `<div class="total-bar"><span>Total spent</span><b>${inr(sum(exps))}</b></div>`;
+  const pending = exps.filter(isPending);
+  if (!['All', 'Bus', 'Pending'].includes(state.expCity) && !cityList.includes(state.expCity)) state.expCity = 'All';
+  let html = `<div class="total-bar"><span>Total spent${pending.length ? `<small>incl. ${inr(sum(pending))} pending</small>` : ''}</span><b>${inr(sum(exps))}</b></div>`;
+  if (pending.length) {
+    html += `<button class="pending-bar ${state.expCity === 'Pending' ? 'on' : ''}" data-exp-city="Pending">
+      <span>Pending payment · ${pending.length}</span><b>${inr(sum(pending))}</b></button>`;
+  }
   const busParts = BUS_CATEGORIES.map((c) => [c, sum(bus.filter((e) => e.category === c))]).filter(([, v]) => v);
   html += `<button class="bus-bar ${state.expCity === 'Bus' ? 'on' : ''}" data-exp-city="Bus">
     <span class="bus-top"><span>Bus</span><b>${inr(sum(bus))}</b></span>
@@ -668,6 +678,15 @@ function renderExpenses() {
   html += `<div class="chips">${['All', 'Bus', ...cityList].map((c) =>
     `<button class="chip ${c === state.expCity ? 'on' : ''} ${c === 'Bus' ? 'bus' : ''}" data-exp-city="${esc(c)}">${esc(c)}</button>`).join('')}
     <button class="chip edit" data-act="cities">Edit cities</button></div>`;
+
+  if (state.expCity === 'Pending') {
+    html += '<div class="list">';
+    const list = pending.sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.createdAt - b.createdAt);
+    html += `<div class="sortable-header"><span>Not paid yet</span><span>${inr(sum(list))}</span></div>`;
+    html += list.map((e) => expenseCard(e, false)).join('');
+    if (!list.length) html += '<p class="empty">Nothing pending. Tolls show here until they are marked paid.</p>';
+    return html + '</div>';
+  }
 
   if (state.expCity === 'Bus') {
     // Bus view: grouped by category, oldest first. Not draggable, since the groups are categories, not cities.
@@ -831,7 +850,7 @@ function renderSummary() {
     <div class="stats">
       <div><small>Driven</small><b>${km(totalKm)}</b></div>
       <div><small>Planned</small><b>${km(planned)}</b></div>
-      <div><small>Spent</small><b>${inr(total)}</b></div>
+      <div><small>Spent${exps.some(isPending) ? ` (${inr(sum(exps.filter(isPending)))} pending)` : ''}</small><b>${inr(total)}</b></div>
     </div>
     <h3>Kilometres by day</h3>
     ${table(['Day', 'Start', 'End', 'Driven', 'Plan'], dayRows)}
@@ -862,9 +881,9 @@ function csv(rows) {
 function exportCsv(kind) {
   let rows;
   if (kind === 'expenses') {
-    rows = [['Date', 'City', 'Category', 'Bus', 'Amount', 'Paid by', 'Note', 'Receipts'],
+    rows = [['Date', 'City', 'Category', 'Bus', 'Amount', 'Status', 'Paid by', 'Note', 'Receipts'],
       ...live(state.expenses).sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order)
-        .map((e) => [e.date, e.city, e.category, isBus(e) ? 'Yes' : '', e.amount, e.paidBy, e.note, receiptsOf(e.id).length || ''])];
+        .map((e) => [e.date, e.city, e.category, isBus(e) ? 'Yes' : '', e.amount, isPending(e) ? 'Pending' : 'Paid', e.paidBy, e.note, receiptsOf(e.id).length || ''])];
   } else {
     rows = [['Date', 'Stop', 'City', 'Type', 'KM reading', 'Time', 'Planned km', 'Contact', 'Phone', 'Notes'],
       ...sortedStops().map((s) => [s.date, s.name, s.city, s.kind, s.km ?? '', s.time, s.plannedKm ?? '', s.contact || '', s.phone || '', s.notes])];
@@ -1026,6 +1045,12 @@ function bindEvents() {
     for (const c of grid.children) c.classList.toggle('on', c === card);
     grid.hidden = true;
     $('[data-picker-toggle]', picker).classList.remove('open');
+    if ($('input[type=hidden]', picker).name === 'category') {
+      const status = $('#sheet #f-status')?.closest('.picker');
+      const want = PENDING_BY_DEFAULT.includes(card.dataset.value) ? 'pending' : 'paid';
+      const opt = status && $(`.pick-card[data-value="${want}"]`, status);
+      if (opt && $('input[type=hidden]', status).value !== want) opt.click();
+    }
     if ($('input[type=hidden]', picker).name === 'kind') {
       for (const el of document.querySelectorAll('#sheet .stay-only')) el.hidden = card.dataset.value !== 'Stay';
     }
@@ -1057,10 +1082,13 @@ function bindEvents() {
 
   $('#main').addEventListener('click', async (e) => {
     if (e.target.closest('a[href]')) return;
-    const t = e.target.closest('[data-open-contact],[data-contact-city],[data-open-stop],[data-km],[data-open-exp],[data-receipts],[data-exp-city],[data-photo-city],[data-open-photo],[data-share-city],[data-export],[data-act]');
+    const t = e.target.closest('[data-mark-paid],[data-open-contact],[data-contact-city],[data-open-stop],[data-km],[data-open-exp],[data-receipts],[data-exp-city],[data-photo-city],[data-open-photo],[data-share-city],[data-export],[data-act]');
     if (!t) return;
     const d = t.dataset;
-    if (d.openContact) contactForm(state.contacts.find((x) => x.id === d.openContact));
+    if (d.markPaid) {
+      await db.save('expenses', { ...state.expenses.find((x) => x.id === d.markPaid), pending: false });
+      toast('Marked paid'); await refresh();
+    } else if (d.openContact) contactForm(state.contacts.find((x) => x.id === d.openContact));
     else if (d.contactCity) { state.contactCity = d.contactCity; render(); }
     else if (d.openStop) stopForm(state.stops.find((s) => s.id === d.openStop));
     else if (d.km) kmForm(state.stops.find((s) => s.id === d.km));
