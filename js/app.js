@@ -115,7 +115,7 @@ function field(f) {
   if (f.type === 'select' || f.type === 'city' || f.type === 'day') {
     // Card picker: shows the chosen value; tap it to open a grid of cards.
     let opts = (f.options || []).map((o) => (Array.isArray(o) ? o : [o, o]));
-    if (f.type === 'city') opts = [...new Set([...(f.value ? [f.value] : []), ...cities()])].map((c) => [c, c]);
+    if (f.type === 'city') opts = [...new Set([...(f.value ? [f.value] : []), ...cities().filter((c) => !notACity(c))])].map((c) => [c, c]);
     if (f.type === 'city' && f.optional) opts.unshift(['', 'No city']);
     if (f.type === 'day') opts = [...new Set([...tripDays(), ...(f.value ? [f.value] : [])])].sort().map((d) => [d, dayLabel(d)]);
     const isNew = f.type === 'city' && !opts.length;
@@ -198,7 +198,69 @@ function confirmInline(dlg) {
 function cityOf(d) {
   const c = (d.city === '__new' ? d.cityNew || '' : d.city || '').trim();
   if (!c) throw new Error('Pick a city or type a new one.');
+  if (d.city === '__new') checkCityName(c);
   return c;
+}
+
+// Words that are a category or a stop type, not a place (e.g. a toll typed as a new city).
+const NOT_CITIES = new Set([...KINDS, ...CATEGORIES, ...CONTACT_TYPES, 'Bus', 'Toll naka', 'Lunch', 'Dinner', 'Breakfast', 'Tea', 'Hotel', 'Dhaba']
+  .map((w) => w.toLowerCase()));
+const notACity = (name) => NOT_CITIES.has(String(name || '').trim().toLowerCase());
+function checkCityName(name) {
+  if (notACity(name)) throw new Error(`"${name}" is a category, not a city. Pick the city where it happened.`);
+}
+
+// Renames a city everywhere it is used; renaming onto an existing city merges the two.
+async function renameCity(from, to) {
+  to = to.trim();
+  if (!to) throw new Error('Type the city name.');
+  checkCityName(to);
+  if (to === from) return 0;
+  let n = 0;
+  for (const store of ['stops', 'expenses', 'contacts']) {
+    const list = live(state[store]).filter((r) => r.city === from).map((r) => ({ ...r, city: to }));
+    await db.saveMany(store, list);
+    n += list.length;
+  }
+  for (const p of live(state.photos).filter((r) => r.city === from)) { await db.save('photos', { ...p, city: to }); n++; }
+  for (const k of ['expCity', 'photoCity', 'contactCity']) if (state[k] === from) state[k] = to;
+  return n;
+}
+
+function cityUse(city) {
+  const count = (store) => live(state[store]).filter((r) => r.city === city).length;
+  return [['stop', count('stops')], ['expense', count('expenses')], ['photo', count('photos')], ['contact', count('contacts')]]
+    .filter(([, n]) => n).map(([w, n]) => `${n} ${w}${n > 1 ? 's' : ''}`).join(' · ');
+}
+
+function cityManager() {
+  const all = [...new Set([...cities(), ...live(state.contacts).map((c) => c.city).filter(Boolean)])];
+  all.sort((a, b) => notACity(b) - notACity(a)); // names to fix first
+  const dlg = $('#sheet');
+  dlg.innerHTML = `<div class="sheet-form">
+    <h2>Edit city names</h2>
+    <p class="muted">Tap a city to rename it. Give it the name of another city to merge the two.</p>
+    <div class="list">${all.map((c) => `<button type="button" class="city-row ${notACity(c) ? 'bad' : ''}" data-city="${esc(c)}">
+      <span><b>${esc(c)}</b><small>${esc(cityUse(c))}${notACity(c) ? ' · not a city, rename or merge it' : ''}</small></span><span aria-hidden="true">›</span></button>`).join('')}</div>
+    <div class="sheet-actions"><span class="grow"></span><button type="button" class="btn primary" data-close>Done</button></div>
+  </div>`;
+  dlg.onclick = (e) => {
+    if (e.target.closest('[data-close]')) { dlg.close(); dlg.onclick = null; return; }
+    const row = e.target.closest('[data-city]');
+    if (!row) return;
+    dlg.onclick = null;
+    const from = row.dataset.city;
+    openForm({
+      title: `Rename ${from}`,
+      fields: [{ name: 'to', label: 'New name', value: from, required: true, list: all.filter((c) => c !== from && !notACity(c)),
+        hint: `Changes ${cityUse(from) || 'nothing yet'}. Pick another city's name to merge into it.` }],
+      onSave: async (d) => {
+        const n = await renameCity(from, d.to);
+        toast(n ? `${from} renamed to ${d.to.trim()} on ${n} item(s)` : 'No change');
+      },
+    });
+  };
+  if (!dlg.open) dlg.showModal();
 }
 
 function dayOf(d) {
@@ -604,7 +666,8 @@ function renderExpenses() {
     <span class="bus-parts">${busParts.length ? busParts.map(([c, v]) => `${esc(c === 'Fuel' ? c : c.replace('Bus ', '').replace(/^./, (x) => x.toUpperCase()))} ${inr(v)}`).join(' · ') : 'Fuel, advance, toll and parking show here'}</span>
   </button>`;
   html += `<div class="chips">${['All', 'Bus', ...cityList].map((c) =>
-    `<button class="chip ${c === state.expCity ? 'on' : ''} ${c === 'Bus' ? 'bus' : ''}" data-exp-city="${esc(c)}">${esc(c)}</button>`).join('')}</div>`;
+    `<button class="chip ${c === state.expCity ? 'on' : ''} ${c === 'Bus' ? 'bus' : ''}" data-exp-city="${esc(c)}">${esc(c)}</button>`).join('')}
+    <button class="chip edit" data-act="cities">Edit cities</button></div>`;
 
   if (state.expCity === 'Bus') {
     // Bus view: grouped by category, oldest first. Not draggable, since the groups are categories, not cities.
@@ -819,6 +882,7 @@ function renderSync() {
       <h3>This phone</h3>
       <p>Entries from this phone are marked <b>${esc(state.device || 'not set')}</b>.</p>
       <button class="btn" data-act="rename">Change name</button>
+      <button class="btn" data-act="cities">Edit city names</button>
     </section>
     <section class="panel">
       <h3>Cloud sync</h3>
@@ -1014,6 +1078,7 @@ function bindEvents() {
       shareFiles(files, `${d.shareCity} photos`);
     } else if (d.export) exportCsv(d.export);
     else if (d.act === 'rename') askName(true);
+    else if (d.act === 'cities') cityManager();
     else if (d.act === 'cloud-sync') runCloudSync();
     else if (d.act === 'share-sync') shareFiles([await sync.buildSyncFile(state.device)], 'Yatra sync file');
   });

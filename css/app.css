@@ -229,3 +229,11 @@ nav button { font-size: 11px; }
   display: flex; align-items: center; justify-content: center; color: #1a73e8; background: #e8f0fe; border: 1px solid #c6dafc;
 }
 .nav-btn:not(.has) { color: #6f8fbf; background: #f3f6fb; border-style: dashed; }
+.chip.edit { border-style: dashed; color: var(--brand-dark); }
+.city-row {
+  display: flex; justify-content: space-between; align-items: center; width: 100%; text-align: left;
+  background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; font-size: 18px; color: var(--muted);
+}
+.city-row b { font-size: 16px; color: var(--text); }
+.city-row small { display: block; font-size: 12px; color: var(--muted); }
+.city-row.bad { border-color: #efc7c2; background: #fff6f4; }
